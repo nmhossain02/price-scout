@@ -1,0 +1,196 @@
+name: price-scout
+
+x-control-plane: &control-plane
+  image: price-scout-control-plane:dev
+  build:
+    context: .
+    dockerfile: cmd/scout/Dockerfile
+  environment: &control-plane-environment
+    SCOUT_HTTP_ADDR: ":8080"
+    DATABASE_URL: ${DATABASE_URL:-postgres://scout:scout@postgres:5432/scout?sslmode=disable}
+    NATS_URL: ${NATS_URL:-nats://nats:4222}
+    WORKER_API_TOKEN: ${WORKER_API_TOKEN:-local-development-token-change-me}
+    ARTIFACT_DIR: /data/artifacts
+    SCOUT_PUBLIC_URL: ${SCOUT_PUBLIC_URL:-http://127.0.0.1:3000}
+    SCOUT_WEB_ROOT: /app/web
+    SCOUT_FIXTURE_ORIGIN: ${SCOUT_FIXTURE_ORIGIN:-http://fixture:4173}
+    DEFAULT_INTERVAL_MINUTES: ${DEFAULT_INTERVAL_MINUTES:-360}
+    MIN_INTERVAL_MINUTES: ${MIN_INTERVAL_MINUTES:-15}
+    SCOUT_EXECUTION_RUNNING_STALE_AFTER: ${SCOUT_EXECUTION_RUNNING_STALE_AFTER:-5m}
+    SCOUT_EXECUTION_MAX_ATTEMPTS: ${SCOUT_EXECUTION_MAX_ATTEMPTS:-3}
+    ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    ALERT_WEBHOOK_SECRET: ${ALERT_WEBHOOK_SECRET:-}
+    DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+  restart: unless-stopped
+  init: true
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: scout
+      POSTGRES_USER: scout
+      POSTGRES_PASSWORD: scout
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scout -d scout"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    volumes:
+      - nats-data:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  fixture:
+    image: price-scout-fixture:dev
+    build:
+      context: fixture
+    environment:
+      PORT: 4173
+      FIXTURE_CONTROL_TOKEN: ${FIXTURE_CONTROL_TOKEN:-development-fixture-token}
+    ports:
+      - "127.0.0.1:4173:4173"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4173/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    <<: *control-plane
+    command: ["api"]
+    ports:
+      - "127.0.0.1:3000:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - artifacts:/data/artifacts:ro
+
+  scheduler:
+    <<: *control-plane
+    command: ["scheduler"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    image: price-scout-worker:dev
+    build:
+      context: worker
+    environment:
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
+      INTERNAL_API_URL: http://api:8080
+      WORKER_TOKEN: ${WORKER_API_TOKEN:-local-development-token-change-me}
+      BROWSER_PROVIDER: ${BROWSER_PROVIDER:-LOCAL}
+      BROWSERBASE_API_KEY: ${BROWSERBASE_API_KEY:-}
+      BROWSERBASE_PROJECT_ID: ${BROWSERBASE_PROJECT_ID:-}
+      MODEL_NAME: ${STAGEHAND_MODEL:-openai/gpt-4.1-mini}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      INFERENCE_MODE: ${INFERENCE_MODE:-auto}
+      CHROME_EXECUTABLE_PATH: /usr/bin/chromium
+      ARTIFACT_DIR: /data/artifacts
+      NAVIGATION_TIMEOUT_MS: ${NAVIGATION_TIMEOUT_MS:-30000}
+      CONTROL_PLANE_TIMEOUT_MS: ${CONTROL_PLANE_TIMEOUT_MS:-15000}
+      JOB_TIMEOUT_MS: ${JOB_TIMEOUT_MS:-120000}
+      FIXTURE_ORIGIN: ${SCOUT_FIXTURE_ORIGIN:-http://fixture:4173}
+      ALLOWED_PRIVATE_HOSTS: fixture
+    depends_on:
+      api:
+        condition: service_healthy
+      fixture:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    volumes:
+      - artifacts:/data/artifacts
+    shm_size: 1gb
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  nats-exporter:
+    image: natsio/prometheus-nats-exporter:0.17.3
+    profiles: [ops]
+    command: ["-varz", "-jsz=all", "http://nats:8222"]
+    depends_on:
+      - nats
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    profiles: [ops]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - api
+      - scheduler
+      - nats-exporter
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    profiles: [ops]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  nats-data:
+  artifacts:
+  prometheus-data:
+  grafana-data:

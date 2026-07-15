@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: price-scout
+data:
+  SCOUT_HTTP_ADDR: ":8080"
+  DATABASE_URL: postgres://scout:scout@postgres:5432/scout?sslmode=disable
+  NATS_URL: nats://nats:4222
+  WORKER_MAX_IN_FLIGHT: "100"
+  INTERNAL_API_URL: http://api:8080
+  ARTIFACT_DIR: /data/artifacts
+  NAVIGATION_TIMEOUT_MS: "30000"
+  CONTROL_PLANE_TIMEOUT_MS: "15000"
+  JOB_TIMEOUT_MS: "120000"
+  SCOUT_ARTIFACT_ROOT: /data/artifacts
+  DEFAULT_INTERVAL_MINUTES: "360"
+  MIN_INTERVAL_MINUTES: "15"
+  SCOUT_EXECUTION_RUNNING_STALE_AFTER: 5m
+  SCOUT_EXECUTION_MAX_ATTEMPTS: "3"
+  BROWSER_PROVIDER: LOCAL
+  FIXTURE_ORIGIN: http://fixture:4173
+  ALLOWED_PRIVATE_HOSTS: fixture
+  MODEL_NAME: openai/gpt-4.1-mini
+  INFERENCE_MODE: auto
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: price-scout
+type: Opaque
+stringData:
+  WORKER_API_TOKEN: kind-development-token-change-me
+  OPENAI_API_KEY: ""
+  BROWSERBASE_API_KEY: ""
+  BROWSERBASE_PROJECT_ID: ""
+  ALERT_WEBHOOK_URL: ""
+  ALERT_WEBHOOK_SECRET: ""
+  DISCORD_WEBHOOK_URL: ""

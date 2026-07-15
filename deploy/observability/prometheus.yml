@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 10s
+
+scrape_configs:
+  - job_name: price-scout-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8080"]
+
+  - job_name: price-scout-scheduler
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["scheduler:8080"]
+
+  - job_name: price-scout-nats
+    static_configs:
+      - targets: ["nats-exporter:7777"]

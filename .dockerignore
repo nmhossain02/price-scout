@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+**/node_modules
+**/dist
+**/coverage
+data
+artifacts
+browser-profiles
+docs
+deploy

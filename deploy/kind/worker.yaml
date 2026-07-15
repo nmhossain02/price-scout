@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: worker}
+  template:
+    metadata:
+      labels: {app: worker}
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          image: price-scout-worker:dev
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef: {name: price-scout}
+          env:
+            - name: WORKER_TOKEN
+              valueFrom: {secretKeyRef: {name: price-scout, key: WORKER_API_TOKEN}}
+            - name: MODEL_API_KEY
+              valueFrom: {secretKeyRef: {name: price-scout, key: OPENAI_API_KEY}}
+            - name: BROWSERBASE_API_KEY
+              valueFrom: {secretKeyRef: {name: price-scout, key: BROWSERBASE_API_KEY}}
+            - name: BROWSERBASE_PROJECT_ID
+              valueFrom: {secretKeyRef: {name: price-scout, key: BROWSERBASE_PROJECT_ID}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          volumeMounts:
+            - {name: artifacts, mountPath: /data/artifacts}
+            - {name: browser-temp, mountPath: /tmp/price-scout-cache}
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim: {claimName: artifacts}
+        - name: browser-temp
+          emptyDir: {}

@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Price Scout
+    orgId: 1
+    folder: Price Scout
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards

@@ -1,0 +1,76 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Scheduled checks / 5m",
+      "id": 1,
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(increase(scout_scheduled_checks_total[5m]))", "legendFormat": "checks", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Accepted worker results / 5m",
+      "id": 2,
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "sum(increase(scout_execution_results_total[5m]))", "legendFormat": "results", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Open console streams",
+      "id": 3,
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "targets": [{"expr": "sum(scout_sse_connections)", "legendFormat": "connections", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Outbox publishes / 5m",
+      "id": 4,
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "targets": [{"expr": "sum(increase(scout_outbox_published_total[5m]))", "legendFormat": "events", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Execution outcomes",
+      "id": 5,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [{"expr": "sum by (kind, status) (rate(scout_execution_results_total[5m]))", "legendFormat": "{{kind}} · {{status}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP p95 latency",
+      "id": 6,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, route) (rate(scout_http_request_duration_seconds_bucket[5m])))", "legendFormat": "{{route}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Stale execution recoveries",
+      "id": 7,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "targets": [
+        {"expr": "sum by (kind, outcome, prior_state) (increase(scout_execution_recoveries_total[5m]))", "legendFormat": "stale · {{kind}} · {{outcome}} · {{prior_state}}", "refId": "A"},
+        {"expr": "sum by (kind, classification, outcome) (increase(scout_execution_retries_total[5m]))", "legendFormat": "result · {{kind}} · {{classification}} · {{outcome}}", "refId": "B"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP response rate",
+      "id": 8,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "targets": [{"expr": "sum by (route, status) (rate(scout_http_requests_total[5m]))", "legendFormat": "{{route}} · {{status}}", "refId": "A"}]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["price-scout"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timezone": "browser",
+  "title": "Price Scout operations",
+  "uid": "price-scout-operations",
+  "version": 1
+}

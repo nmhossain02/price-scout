@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go control plane
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+      - run: go test -race ./...
+      - run: go vet ./...
+
+  node:
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - directory: worker
+            label: Stagehand worker
+          - directory: fixture
+            label: Deterministic fixture
+          - directory: web
+            label: Engineering console
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npm run build
+
+  repository-contracts:
+    name: Repository contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell syntax
+        run: |
+          find scripts -type f -name '*.sh' -print0 | sort -z | xargs -0 -n1 bash -n
+      - name: Validate rendered Compose model
+        run: docker compose config --quiet
+      - name: Exercise command discovery
+        run: make help
+
+  deterministic-e2e:
+    name: Docker deterministic end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [go, node, repository-contracts]
+    env:
+      BROWSER_PROVIDER: LOCAL
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the full stack
+        run: docker compose up --build --detach
+      - name: Run cold, warm, redesign, repair, and threshold sequence
+        run: ./scripts/demo.sh run
+      - name: Capture service state
+        if: always()
+        run: |
+          docker compose ps || true
+          docker compose logs --no-color --tail=250 api scheduler worker fixture || true
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes --remove-orphans

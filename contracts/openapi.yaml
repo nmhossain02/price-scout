@@ -1,0 +1,379 @@
+openapi: 3.1.0
+info:
+  title: Price Scout Control Plane
+  version: 0.1.0
+  description: Self-hosted monitor, execution, evidence, and worker coordination API.
+servers:
+  - url: http://127.0.0.1:3000
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        "200": {description: Process is alive}
+  /readyz:
+    get:
+      operationId: readiness
+      responses:
+        "200": {description: Postgres and NATS are ready}
+        "503": {$ref: "#/components/responses/Error"}
+  /api/v1/monitors:
+    post:
+      operationId: createMonitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateMonitor"}
+      responses:
+        "202":
+          description: Compilation was queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [monitor, execution]
+                properties:
+                  monitor: {$ref: "#/components/schemas/Monitor"}
+                  execution: {$ref: "#/components/schemas/Execution"}
+        "400": {$ref: "#/components/responses/Error"}
+    get:
+      operationId: listMonitors
+      parameters:
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}}
+      responses:
+        "200":
+          description: Monitor page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, limit, offset]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/MonitorSummary"}}
+                  limit: {type: integer}
+                  offset: {type: integer}
+  /api/v1/monitors/{monitorId}:
+    parameters:
+      - {$ref: "#/components/parameters/MonitorId"}
+    get:
+      operationId: getMonitor
+      responses:
+        "200":
+          description: Monitor and recent history
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MonitorDetail"}
+        "404": {$ref: "#/components/responses/Error"}
+    patch:
+      operationId: updateMonitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                intervalMinutes: {type: integer, minimum: 15}
+                condition: {$ref: "#/components/schemas/PriceCondition"}
+                action: {type: string, enum: [pause, resume]}
+      responses:
+        "200":
+          description: Updated monitor
+          content: {application/json: {schema: {$ref: "#/components/schemas/Monitor"}}}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/v1/monitors/{monitorId}/confirm:
+    parameters:
+      - {$ref: "#/components/parameters/MonitorId"}
+    post:
+      operationId: confirmMonitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revisionId, condition]
+              properties:
+                revisionId: {type: string, format: uuid}
+                condition: {$ref: "#/components/schemas/PriceCondition"}
+      responses:
+        "200":
+          description: Candidate activated
+          content: {application/json: {schema: {$ref: "#/components/schemas/Monitor"}}}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/v1/monitors/{monitorId}/checks:
+    parameters:
+      - {$ref: "#/components/parameters/MonitorId"}
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema: {type: string, maxLength: 200}
+    post:
+      operationId: enqueueCheck
+      responses:
+        "202":
+          description: Check queued or existing idempotent execution returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [execution, created]
+                properties:
+                  execution: {$ref: "#/components/schemas/Execution"}
+                  created: {type: boolean}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/v1/monitors/{monitorId}/reviews/{revisionId}/{decision}:
+    parameters:
+      - {$ref: "#/components/parameters/MonitorId"}
+      - {in: path, name: revisionId, required: true, schema: {type: string, format: uuid}}
+      - {in: path, name: decision, required: true, schema: {type: string, enum: [accept, reject]}}
+    post:
+      operationId: reviewRevision
+      responses:
+        "200":
+          description: Review recorded
+          content: {application/json: {schema: {$ref: "#/components/schemas/Monitor"}}}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/v1/executions/{executionId}:
+    parameters:
+      - {$ref: "#/components/parameters/ExecutionId"}
+    get:
+      operationId: getExecution
+      responses:
+        "200":
+          description: Execution with observation and evidence
+          content: {application/json: {schema: {$ref: "#/components/schemas/ExecutionDetail"}}}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/v1/artifacts/{artifactId}:
+    parameters:
+      - {in: path, name: artifactId, required: true, schema: {type: string, format: uuid}}
+    get:
+      operationId: getArtifact
+      responses:
+        "200": {description: Artifact bytes}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/v1/events:
+    get:
+      operationId: streamEvents
+      responses:
+        "200":
+          description: Server-sent engineering-console events
+          content: {text/event-stream: {schema: {type: string}}}
+  /internal/v1/executions/{executionId}/input:
+    parameters:
+      - {$ref: "#/components/parameters/ExecutionId"}
+      - {$ref: "#/components/parameters/WorkerToken"}
+    get:
+      operationId: getWorkerInput
+      responses:
+        "200":
+          description: Complete immutable execution input
+          content: {application/json: {schema: {$ref: "#/components/schemas/ExecutionInput"}}}
+        "401": {$ref: "#/components/responses/Error"}
+  /internal/v1/executions/{executionId}/result:
+    parameters:
+      - {$ref: "#/components/parameters/ExecutionId"}
+      - {$ref: "#/components/parameters/WorkerToken"}
+    post:
+      operationId: submitWorkerResult
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/ExecutionResult"}}}
+      responses:
+        "200":
+          description: Result accepted; repeated submissions return accepted false
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [execution, accepted]
+                properties:
+                  execution: {$ref: "#/components/schemas/Execution"}
+                  accepted: {type: boolean}
+        "401": {$ref: "#/components/responses/Error"}
+components:
+  parameters:
+    MonitorId: {in: path, name: monitorId, required: true, schema: {type: string, format: uuid}}
+    ExecutionId: {in: path, name: executionId, required: true, schema: {type: string, format: uuid}}
+    WorkerToken: {in: header, name: X-Worker-Token, required: true, schema: {type: string}}
+  responses:
+    Error:
+      description: Structured API error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties:
+                  status: {type: integer}
+                  message: {type: string}
+  schemas:
+    CreateMonitor:
+      type: object
+      additionalProperties: false
+      required: [url, intent]
+      properties:
+        url: {type: string, format: uri}
+        intent: {type: string, minLength: 1, maxLength: 2000}
+        intervalMinutes: {type: integer, minimum: 15, default: 360}
+    PriceCondition:
+      type: object
+      required: [priceBelowMinor, currency, requireInStock]
+      properties:
+        priceBelowMinor: {type: integer, minimum: 1}
+        currency: {type: string, enum: [USD, CAD, EUR, GBP, AUD]}
+        requireInStock: {type: boolean, default: true}
+        requestedVariant: {type: object, additionalProperties: {type: string}}
+    MonitorCondition:
+      description: Empty until an initial revision is confirmed; otherwise a validated price condition.
+      oneOf:
+        - type: object
+          maxProperties: 0
+        - {$ref: "#/components/schemas/PriceCondition"}
+    Monitor:
+      type: object
+      required: [id, url, intent, intervalMinutes, condition, status, conditionMatched, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        url: {type: string, format: uri}
+        intent: {type: string}
+        intervalMinutes: {type: integer}
+        condition: {$ref: "#/components/schemas/MonitorCondition"}
+        status: {type: string, enum: [compiling, awaiting_confirmation, active, needs_review, paused, blocked]}
+        currentRevisionId: {type: string, format: uuid}
+        conditionMatched: {type: boolean}
+        nextRunAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    MonitorSummary:
+      allOf:
+        - {$ref: "#/components/schemas/Monitor"}
+        - type: object
+          properties:
+            latestObservation: {$ref: "#/components/schemas/Observation"}
+    Revision:
+      type: object
+      required: [id, monitorId, generation, plan, source, validationState, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        monitorId: {type: string, format: uuid}
+        generation: {type: integer, minimum: 1}
+        plan: {type: object, additionalProperties: true}
+        source: {type: string, enum: [compile, repair, manual]}
+        validationState: {type: string, enum: [candidate, awaiting_confirmation, active, rejected]}
+        activatedAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
+    Execution:
+      type: object
+      required: [id, monitorId, kind, attempt, state, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        monitorId: {type: string, format: uuid}
+        revisionId: {type: string, format: uuid}
+        kind: {type: string, enum: [compile, check, repair]}
+        requestedGeneration: {type: integer}
+        attempt: {type: integer}
+        recoveryOf: {type: string, format: uuid}
+        state: {type: string, enum: [queued, running, succeeded, failed, blocked, needs_review]}
+        failureClassification: {type: string}
+        provider: {type: string}
+        traceId: {type: string}
+        browserSessionUrl: {type: string, format: uri}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+    Observation:
+      type: object
+      required: [id, monitorId, executionId, priceMinor, currency, inStock, title, verificationState, conditionMatched, observedAt]
+      properties:
+        id: {type: string, format: uuid}
+        monitorId: {type: string, format: uuid}
+        executionId: {type: string, format: uuid}
+        priceMinor: {type: integer, minimum: 1}
+        currency: {type: string, pattern: "^[A-Z]{3}$"}
+        inStock: {type: boolean}
+        title: {type: string}
+        rawText: {type: string}
+        identity: {type: object, additionalProperties: true}
+        verificationState: {type: string, enum: [verified, review_required, failed, blocked]}
+        conditionMatched: {type: boolean}
+        observedAt: {type: string, format: date-time}
+    Artifact:
+      type: object
+      required: [id, executionId, kind, contentType, url, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        executionId: {type: string, format: uuid}
+        kind: {type: string}
+        contentType: {type: string}
+        sha256: {type: string}
+        sizeBytes: {type: integer}
+        url: {type: string}
+        createdAt: {type: string, format: date-time}
+    ExecutionDetail:
+      allOf:
+        - {$ref: "#/components/schemas/Execution"}
+        - type: object
+          required: [artifacts]
+          properties:
+            observation: {$ref: "#/components/schemas/Observation"}
+            artifacts: {type: array, items: {$ref: "#/components/schemas/Artifact"}}
+    MonitorDetail:
+      type: object
+      required: [monitor, revisions, executions, observations]
+      properties:
+        monitor: {$ref: "#/components/schemas/Monitor"}
+        revisions: {type: array, items: {$ref: "#/components/schemas/Revision"}}
+        executions: {type: array, items: {$ref: "#/components/schemas/Execution"}}
+        observations: {type: array, items: {$ref: "#/components/schemas/Observation"}}
+    ExecutionInput:
+      type: object
+      required: [schemaVersion, execution, monitor]
+      properties:
+        schemaVersion: {type: integer, const: 1}
+        execution: {$ref: "#/components/schemas/Execution"}
+        monitor: {$ref: "#/components/schemas/Monitor"}
+        revision: {$ref: "#/components/schemas/Revision"}
+        plan: {type: object, additionalProperties: true}
+    ExecutionResult:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: {type: string, enum: [succeeded, failed, blocked, needs_review]}
+        failureClassification: {type: string}
+        error: {type: string}
+        provider: {type: string}
+        traceId: {type: string}
+        browserSessionUrl: {type: string, format: uri}
+        plan: {type: object, additionalProperties: true}
+        observation:
+          type: object
+          required: [priceMinor, currency, inStock, title]
+          properties:
+            priceMinor: {type: integer, minimum: 1}
+            currency: {type: string, pattern: "^[A-Z]{3}$"}
+            inStock: {type: boolean}
+            title: {type: string}
+            rawText: {type: string}
+            identity: {type: object, additionalProperties: true}
+            verificationState: {type: string, enum: [verified, review_required]}
+            conditionMatched: {type: boolean}
+        artifacts:
+          type: array
+          items:
+            type: object
+            required: [kind, storageKey, contentType]
+            properties:
+              kind: {type: string}
+              storageKey: {type: string}
+              contentType: {type: string}
+              sha256: {type: string}
+              sizeBytes: {type: integer}
+        autoPromote: {type: boolean, default: false}
+        diagnostics: {type: object, additionalProperties: true}
